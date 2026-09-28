@@ -254,11 +254,57 @@ posicional) está descartado como única camada de proteção da entrada
 fechou), a hipótese que ganha força é "compressão real (zstd ou algo
 próprio) por trás de uma camada de ofuscação/criptografia mais estruturada
 que XOR simples" — ou um dialeto de zstd com parâmetros não padrão que a
-lib Python não reconhece. Próximo passo natural, se surgirem mais amostras:
-testar XOR de chave longa (>16 bytes, ex. derivada de um hash do nome do
-arquivo) e comparar o prefixo de 8 bytes entre *muitas* entradas de tipos
-diferentes pra ver se ele varia com o tipo de conteúdo (o que ajudaria a
-decidir se é um "tipo de seção" em vez de uma constante universal).
+lib Python não reconhece.
+
+### Chave XOR mais longa (16-64 bytes) com plaintext conhecido melhor: também descartada
+
+Ideia: em vez de usar só os 4 bytes do magic do zstd como "plaintext
+conhecido" pra derivar a chave, usar o **cabeçalho real do frame zstd do
+trailer** (que não tem criptografia nenhuma) como modelo exato de como o
+encoder da SI escreve um frame — isso dá 6 bytes conhecidos em vez de 4:
+`28 B5 2F FD 04 50` (magic + Frame_Header_Descriptor `0x04` +
+Window_Descriptor `0x50`, decodificado conforme o spec do zstd: descriptor
+`0x04` = sem tamanho de conteúdo no header, sem dicionário, com checksum;
+window descriptor `0x50` = janela de 1 MB). Confirmado que esse cabeçalho
+de 6 bytes é **idêntico** nos dois trailers testados (`tac1.fmf` e
+`tac2.fmf`), reforçando que é mesmo o padrão fixo do encoder.
+
+Com esses 6 bytes conhecidos, testamos duas hipóteses de "onde a chave
+começa a se repetir", usando as 8 entradas disponíveis (`.img` + `.tac` de
+`tac1.fmf` a `tac4.fmf`):
+
+1. **Reinicia em cada entrada** (o byte 0 do payload de cada entrada usa
+   sempre o byte 0 da chave): derivamos um fragmento de 6 bytes por
+   entrada — **as 8 chaves derivadas são todas diferentes entre si**, sem
+   nenhum par batendo. Se a chave fosse fixa e reiniciasse por entrada,
+   todas deveriam ser idênticas. Descartado.
+2. **Keystream contínuo pelo corpo do arquivo** (a chave não reinicia por
+   entrada; a posição usada é `offset_absoluto - 26`, ou seja, um único
+   fluxo de chave cobrindo o arquivo inteiro, com período `L`): testamos
+   `L` = 8, 16, 24, **32**, 40, 48, 64, alinhando os fragmentos das 8
+   entradas por `posição mod L` e conferindo se batem nas posições onde se
+   sobrepõem. Resultado: **conflito em quase toda posição coberta, em
+   todos os tamanhos testados** (ex.: `L=32` → 12 posições cobertas, 11
+   com valores conflitantes). Nenhum tamanho de chave testado (incluindo os
+   32 bytes sugeridos) é consistente com os dados.
+
+**Conclusão:** não existe uma chave XOR fixa e repetida — nem reiniciando
+por entrada, nem como fluxo contínuo — de nenhum tamanho entre 1 e 64 bytes
+que explique os dados. Isso deixa duas explicações prováveis: **(a)** cada
+entrada/arquivo usa uma chave ou IV **único** (criptografia de verdade, ou
+um nonce derivado de algo que não vemos de fora — timestamp, hash do
+conteúdo, id interno), o que torna esse ataque de plaintext-conhecido
+inviável sem mais informação; ou **(b)** a suposição-base ("por trás da
+criptografia tem um frame zstd padrão") está errada, e o formato real por
+trás não é zstd — nesse caso todo o exercício de derivar "chave" a partir
+do magic simplesmente produziu ruído sem sentido, o que também explicaria
+a total inconsistência observada. Não temos como distinguir (a) de (b) só
+com XOR e as amostras atuais — os próximos passos que poderiam desempatar
+são: (i) testar outras famílias de compressão sobre o conteúdo bruto (LZ4,
+Oodle, brotli, RLE simples) em vez de assumir zstd; ou (ii) obter mais
+amostras `.fmf` (idealmente uma sequência de saves/exports do mesmo
+usuário, pra ver se alguma chave/IV se repete ao longo do tempo); ou (iii)
+olhar o executável do jogo.
 
 ## Tabela de hipóteses
 
@@ -274,6 +320,7 @@ decidir se é um "tipo de seção" em vez de uma constante universal).
 | diretório, 2 últimos `u64` de cada entrada | ex.: `1560165027` (FM19) / `0xFFFFFFF188066E09` (FM26) | Timestamps Unix no FM19; no FM26 parecem ser um valor-sentinela/"não definido" (`f1 ff ff ff` sugere placeholder, não timestamp real) | Alta (FM19) / Média (FM26, campo existe mas com outro significado/estado) | FM19: decodificados batem com junho/2019. FM26: valor idêntico e repetido nas duas entradas do mesmo arquivo, sugerindo "vazio", não uma data real |
 | 25 (u8) | `3` no FM26 real, `0` no FM19 | Byte de versão/flag que mudou entre gerações | Média-Alta | `u8@25=3` bate exatamente com a constante usada no fixture sintético do `fmsave` para FM26 |
 | conteúdo da entrada `.tac` (FM26) | alta entropia após qualquer XOR (invariante) | Não é XOR simples (1 byte, chave repetida ≤16 bytes, por índice, subtração ou NOT) | Alta (descartado) | Nenhuma das 256+256 combinações testadas produziu o magic zstd nem reduziu a entropia (que é matematicamente invariante sob XOR de 1 byte) |
+| conteúdo de todas as 8 entradas testadas (FM26, 4 arquivos) | chaves de 6 bytes derivadas via cabeçalho zstd real | Não é chave XOR fixa/repetida, nem reiniciando por entrada nem como keystream contínuo, em nenhum tamanho de 8 a 64 bytes (incluindo 32) | Alta (descartado) | 8 chaves derivadas todas diferentes (hipótese "reinicia por entrada"); alinhamento por `posição mod L` gera conflito em quase toda posição pra `L` ∈ {8,16,24,32,40,48,64} |
 
 ## Achados confirmados
 
