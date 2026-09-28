@@ -142,6 +142,76 @@ carregando-o de fato. Se alguém com FM26 instalado colocar esse arquivo em
 `Documents/Sports Interactive/Football Manager 26/shortlists/` e tentar
 importar, isso seria a validação final que falta.
 
+## Escrevendo uma TÁTICA do zero — `tools/fmf_write_tactic.py`
+
+Diferente da shortlist, não mapeamos o esquema *interno* completo de uma
+tática (formação, papéis, instruções por fase) — só a camada externa
+(zstd+AES). Mas agora que decifrar deixou de ser o problema, a análise
+diferencial do passo a passo original finalmente ficou viável **no
+conteúdo já descomprimido**, não mais no ciphertext (que não alinha por
+ser comprimido).
+
+### Achado: o campo de "intensidade de pressão"
+
+Comparando `3-3-3-1 Morphing System.fmf` com
+`3-3-3-1 Morphing System High Press.fmf` (mesmíssima tática-base, só essa
+diferença), depois de descriptografar os dois `.tac`:
+
+1. O `.tac` descomprimido começa com `03 01` + `"cat."` invertido (a
+   mesma tag `section_body` do `fmsave`), depois um cabeçalho fixo, e no
+   **offset 16** um `u32` = tamanho do nome (`23` vs `34` — bate exato com
+   `"3-3-3-1 Morphing System"` vs `"...System High Press"`, 23 e 34
+   caracteres). O nome em si começa no offset 20.
+2. Como o nome tem tamanho variável, tudo depois dele desalinha entre os
+   dois arquivos por causa da diferença de 11 bytes no nome — exatamente
+   o aviso que o próprio `diff_bytes.py` imprime. Realinhando (comparando
+   `A[20+23:]` com `B[20+34:]`), os **5077 bytes restantes são idênticos
+   exceto em exatamente 2 offsets**:
+
+   | Offset (pós-nome) | Base | High Press | XOR | Interpretação |
+   |---|---|---|---|---|
+   | 23 | `0x54` (`0101 0100`) | `0x94` (`1001 0100`) | `0xC0` | 2 bits (6-7) mudam de `01`→`10`: provável enum de intensidade de pressão (normal→alta) |
+   | 27 | `0x80` (`1000 0000`) | `0x90` (`1001 0000`) | `0x10` | 1 bit (4) liga: provável flag booleana associada |
+
+3. **Validado:** aplicar XOR `0xC0` e XOR `0x10` nesses 2 offsets na
+   tática base reproduz **byte a byte** (exceto o campo de nome, que não
+   alteramos) o conteúdo real da tática "High Press" exportada pelo
+   próprio jogo.
+
+### Tática nova, escrita do zero, com conteúdo validado
+
+Como ainda não temos o esquema completo pra compor uma tática do nada
+(formação/papéis do zero seria só um chute), o caminho honesto foi:
+pegar o conteúdo **real e validado** de uma tática (a base, decifrada do
+arquivo original), aplicar a transformação **validada** acima, e escrever
+tudo através do nosso próprio pipeline de container do zero (chave/IV AES
+novos, catálogo remontado, header novo) — nenhum byte do container ou da
+criptografia original é reaproveitado, só o conteúdo tático em si (que já
+sabemos que é válido porque bate com o que o próprio FM26 gerou).
+
+```bash
+python3 tools/fmf_write_tactic.py base.fmf --high-press \
+  --name "Minha Variante" --description "..." --author "..." \
+  --out nova.fmf
+```
+
+Testado e confirmado: o `.tac` de dentro do arquivo gerado, depois de
+descriptografado com nosso próprio leitor, bate **100%** com o conteúdo
+da tática "High Press" real (exceto o nome, que é o nosso). O
+`_data/details.aom` também decodifica corretamente com
+`"TACTICS_TYPE_HANDLER"` e o nome/descrição/autor escolhidos — o layout
+desse recurso (magic `moa.`, string do tipo, nome, descrição, 6 bytes
+zero, 16 bytes `0xFF`, autor, e um sufixo estrutural de 22 bytes que
+parece um GUID de tipo) foi extraído com precisão via código direto do
+`details.aom` real, não de cabeça.
+
+**Mesma ressalva da shortlist:** validado contra nosso próprio
+leitor/análise, não contra o FM26 de verdade (que não temos aqui pra
+testar). O campo de "pressão" é o único que mapeamos com confiança — o
+resto da tática (formação, papéis, instruções por jogador) continua
+sendo uma caixa-preta de bytes que só sabemos copiar de uma base real,
+não compor do zero.
+
 ## Status atual (contexto histórico da investigação abaixo)
 
 O sandbox de desenvolvimento não tem o FM26 instalado (é um container Linux
