@@ -306,6 +306,31 @@ amostras `.fmf` (idealmente uma sequência de saves/exports do mesmo
 usuário, pra ver se alguma chave/IV se repete ao longo do tempo); ou (iii)
 olhar o executável do jogo.
 
+### LZ4 testado (item "i" acima): também descartado
+
+Testado sobre as duas entradas de `3-3-3-1 Morphing System.fmf`
+(`image.img`, 63 bytes / decomprime pra 10; `.tac`, 940 bytes / decomprime
+pra 5120), com a lib `lz4` (bindings oficiais do LZ4):
+
+- **Magic do formato "frame"** (`04 22 4D 18`), **"legacy"** (`02 21 4C
+  18`) e **"skippable frame"** (`184D2A5X`, mesma família do zstd) — zero
+  ocorrências em qualquer lugar do arquivo inteiro.
+- **`lz4.frame.decompress`** direto na entrada — falha (`ERROR_frameType_
+  unknown`, ou seja, nem reconhece como frame LZ4 válido).
+- **`lz4.block.decompress`** (formato "block" raw, sem cabeçalho nenhum —
+  o mais provável de um engine de jogo usar internamente), testado em
+  todos os offsets de 0 a 23 bytes, informando o tamanho descomprimido
+  exato que já conhecíamos pelo diretório (10 e 5120 respectivamente) —
+  **zero sucessos** em ambas as entradas, em todos os offsets.
+
+**Conclusão:** LZ4 (frame, legacy ou block cru) está descartado como o
+formato por trás da criptografia/ofuscação dessas entradas, do mesmo jeito
+que zlib, zstd puro e deflate cru já tinham sido. Sobra Oodle (formato
+proprietário usado por várias engines AAA, sem biblioteca Python livre
+pra testar facilmente) e brotli como famílias de compressão ainda não
+testadas, além da possibilidade de ser criptografia de verdade (não
+compressão) por cima de qualquer coisa.
+
 ## Tabela de hipóteses
 
 | Offset | Bytes | Hipótese | Confiança | Validação |
@@ -321,6 +346,7 @@ olhar o executável do jogo.
 | 25 (u8) | `3` no FM26 real, `0` no FM19 | Byte de versão/flag que mudou entre gerações | Média-Alta | `u8@25=3` bate exatamente com a constante usada no fixture sintético do `fmsave` para FM26 |
 | conteúdo da entrada `.tac` (FM26) | alta entropia após qualquer XOR (invariante) | Não é XOR simples (1 byte, chave repetida ≤16 bytes, por índice, subtração ou NOT) | Alta (descartado) | Nenhuma das 256+256 combinações testadas produziu o magic zstd nem reduziu a entropia (que é matematicamente invariante sob XOR de 1 byte) |
 | conteúdo de todas as 8 entradas testadas (FM26, 4 arquivos) | chaves de 6 bytes derivadas via cabeçalho zstd real | Não é chave XOR fixa/repetida, nem reiniciando por entrada nem como keystream contínuo, em nenhum tamanho de 8 a 64 bytes (incluindo 32) | Alta (descartado) | 8 chaves derivadas todas diferentes (hipótese "reinicia por entrada"); alinhamento por `posição mod L` gera conflito em quase toda posição pra `L` ∈ {8,16,24,32,40,48,64} |
+| conteúdo da entrada `.tac`/`.img` (FM26) | sem magic LZ4, `lz4.block.decompress` falha em todos os offsets | Não é LZ4 (frame, legacy ou block cru) | Alta (descartado) | Zero ocorrências dos magics de frame/legacy/skippable; `lz4.block.decompress` com tamanho exato conhecido falha em offsets 0-23 nas duas entradas testadas |
 
 ## Achados confirmados
 
