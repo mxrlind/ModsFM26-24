@@ -6,6 +6,12 @@
 > open-source no GitHub. Não existe SDK/documentação oficial da Sports
 > Interactive/SEGA — tudo aqui é conhecimento comunitário reverse-engineered e
 > pode quebrar entre patches/versões do jogo.
+>
+> **Atualização:** o mecanismo do `.fmf` binário (seção 2) foi decifrado por
+> completo depois desta pesquisa inicial — ver
+> `docs/reverse-engineering-log.md` (seção "FORMATO RESOLVIDO") e a
+> ferramenta `tools/fmf_extract.py`, que já lê qualquer `.fmf` sem precisar
+> do Resource Archiver oficial.
 
 ## 1. Dois "editores" oficiais — não são a mesma coisa
 
@@ -30,19 +36,26 @@ Documents/Sports Interactive/Football Manager 26/editor data/
 
 e podem ser de dois tipos:
 
-- **`.fmf`** — formato binário **proprietário e fechado**. É o mesmo
-  container usado pra skins, motor de partida (`simatch.fmf`) etc. Não existe
-  parser open-source funcional pra ele. A única forma de mexer nele é através
-  do **Resource Archiver** (ferramenta oficial que vem junto nas "Tools" da
-  Steam), que faz extração/compilação `.fmf ↔ XML`.
-- **`.xml`** — formato de texto, o **"db_changes"**. É o que dá pra ler,
-  gerar e versionar em Git. É o caminho realista pra automação/mod pipeline.
+- **`.fmf`** — formato binário, container proprietário reaproveitado pra
+  skins, táticas, shortlists, motor de partida (`simatch.fmf`), saves etc.
+  **Já decifrado nesta pesquisa** (ver `docs/reverse-engineering-log.md`):
+  um cabeçalho de 26 bytes aponta pra um catálogo comprimido (zstd) no fim
+  do arquivo, e cada recurso listado é `zstd.compress(conteúdo)` cifrado
+  com **AES-128/CTR** — só que a chave e o IV, gerados aleatoriamente por
+  recurso, ficam guardados **em texto puro** junto do próprio recurso (não
+  é uma proteção forte, é só o suficiente pra não abrir num editor de texto
+  ou arquivador genérico). `tools/fmf_extract.py` já lê qualquer `.fmf`
+  sem precisar do Resource Archiver oficial.
+- **`.xml`** — formato de texto, o **"db_changes"**. Continua sendo o
+  caminho mais prático pra *gerar* mods programaticamente (mais legível
+  que montar a árvore binária à mão), mas agora também é viável ler e
+  escrever `.fmf` diretamente em Python.
 
-**Conclusão prática:** não vale a pena tentar reverter o `.fmf` — o próprio
-editor já aceita `.xml` diretamente na pasta `editor data` (marcando na tela
-de "New Game"). Trabalhar em XML e, se quiser, compilar pra `.fmf` no final
-(via Resource Archiver) só por questão de ofuscação/performance de
-carregamento.
+**Conclusão prática:** pra **gerar** mods, XML continua sendo o caminho de
+menor esforço (o próprio editor aceita `.xml` direto na pasta `editor data`,
+marcando na tela de "New Game"). Pra **ler/inspecionar** qualquer `.fmf`
+existente (tática, shortlist, banco de dados) sem depender do jogo nem do
+Resource Archiver, use `tools/fmf_extract.py`.
 
 ## 3. Estrutura do XML `db_changes`
 

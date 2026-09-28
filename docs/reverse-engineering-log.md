@@ -15,7 +15,102 @@ arquivo FM26
   -> [8] exportar JSON/CSV
 ```
 
-## Status atual
+## 🔓 FORMATO RESOLVIDO (2026-09-28)
+
+Depois de descartar experimentalmente zlib, zstd puro, zstd "magicless",
+LZ4 (frame/legacy/block), brotli e XOR (chave única, repetida de 1 a 64
+bytes, fixa ou como keystream contínuo) para o conteúdo das entradas do
+`.fmf`, a resposta certa apareceu ao pesquisar o projeto open-source
+**[JelmerBouma1985/fm-ai-assistent](https://github.com/JelmerBouma1985/fm-ai-assistent)**
+(sem arquivo de licença no repositório — código **não copiado**, apenas
+estudado; a implementação abaixo em `tools/fmf_extract.py` é nossa,
+reescrita do zero a partir do entendimento do mecanismo, o que é prática
+padrão e legítima de engenharia reversa pra interoperabilidade — formatos e
+algoritmos não são protegidos por direito autoral, só a expressão de código
+específica é). O arquivo-chave foi
+`src/main/java/com/github/fmaiassistent/shortlist/FmfShortlistFile.java`.
+
+### O mecanismo real
+
+Cada recurso listado no catálogo (o que a gente vinha chamando de
+"entrada") não é só comprimido — é **comprimido com zstd e depois
+criptografado com AES-128 em modo CTR**, com uma peça crucial: **a chave
+AES e o IV são gerados aleatoriamente por recurso e guardados em texto
+puro, sem nenhuma proteção, logo no início do próprio recurso**:
+
+```
+u32 tamanho_da_chave (sempre 16)
+u32 tamanho_do_IV (sempre 16)
+16 bytes: chave AES-128, em claro
+16 bytes: IV (usado como contador inicial do modo CTR), em claro
+resto: ciphertext = AES/CTR/NoPadding(zstd.compress(conteúdo_real))
+```
+
+**Isso explica tudo que a gente vinha vendo e não conseguia decifrar:**
+
+- O misterioso prefixo constante `10 00 00 00 10 00 00 00` que aparecia
+  antes de toda entrada, em todo arquivo testado (FM19 e FM26)? Não é um
+  "mini-header" nem uma seção de tipo — é literalmente
+  `u32(16) + u32(16)`, os tamanhos de chave e IV, que são **sempre 16**
+  (AES-128), por isso pareciam uma constante universal.
+- Por que todo teste de XOR (1 byte, chave repetida de qualquer tamanho,
+  por índice, com ou sem reinício por entrada) falhava de forma
+  consistente e sem nenhum padrão? Porque a gente estava tentando
+  descriptografar byte a byte a partir do offset errado — os 32 bytes
+  logo depois do prefixo de 16/16 **são a própria chave e o IV, gerados
+  aleatoriamente a cada recurso**, não o início do conteúdo cifrado. Não
+  existe XOR fixo porque não é XOR: é AES de verdade, com chave nova a
+  cada arquivo — só que essa chave está a poucos bytes de distância, sem
+  nenhuma proteção.
+- Por que zstd/LZ4/brotli "quase batiam" (o "magicless" chegou a passar da
+  checagem inicial) mas nunca fechavam? Porque o zstd real só começa
+  *depois* de descriptografar com AES — sem a chave (que está bem ali do
+  lado, só não estávamos olhando pra ela do jeito certo), qualquer tentativa
+  de descomprimir direto o ciphertext é, na prática, tentar descomprimir
+  ruído aleatório.
+
+### Testado e confirmado, com decriptografia real
+
+Implementei o mecanismo em `tools/fmf_extract.py` (Python puro, usa
+`pycryptodome` pro AES-CTR e `zstandard` pro zstd) e rodei contra o mesmo
+arquivo real do FM26 que já vínhamos usando
+(`3-3-3-1 Morphing System.fmf`, de `Glawster/fmsat`). Resultado —
+**as 3 entradas descriptografam com sucesso**, incluindo a que estava
+"escondida" numa subpasta que nosso parser antigo (plano, sem recursão)
+nem alcançava:
+
+- `image.img` → 10 bytes, batendo exatamente com o placeholder de "sem
+  imagem" que o código-fonte usa (`{1,0,0,0,0,0,0,0,0,0}`).
+- `3-3-3-1 Morphing System.tac` → 5120 bytes de conteúdo estruturado de
+  baixa entropia (contra ~7.8 bits/byte antes de descriptografar), com a
+  string `"CustomLLUNB"` e o nome da tática em claro.
+- `_data/details.aom` → 348 bytes **totalmente legíveis em inglês**:
+  `"TACTICS_TYPE_HANDLER"`, o nome da tática, a descrição completa —
+  *"Attack in a 3-2-5 with width from Advanced Wing-Backs and Inside
+  Forwards attacking the half-spaces. Defend in a compact 5-2-2-1 with two
+  Defensive Midfielders screening the back three. Counter quickly after
+  regaining possession."* — e o nome do autor, **"Glawster"**, batendo
+  exatamente com o dono do repositório de onde veio o arquivo.
+
+Isso valida o mecanismo de ponta a ponta: container → catálogo (zstd/zlib)
+→ recurso individual (AES-CTR + zstd). Também explica a entrada universal
+`_data/details.aom` vista em toda amostra (FM19 e FM26): é um descritor de
+tipo padrão do formato (`"..._TYPE_HANDLER"`), presente em qualquer `.fmf`
+independente do conteúdo (tática, shortlist, banco de dados teria seu
+próprio `"..._TYPE_HANDLER"`, provavelmente algo como
+`EDITOR_DATA_TYPE_HANDLER`).
+
+### O que isso destrava
+
+Como a "proteção" é só o algoritmo (real, mas com a chave exposta ao lado
+do dado), **dá pra ler qualquer `.fmf`** com `tools/fmf_extract.py`, e em
+princípio também dá pra **escrever um `.fmf` válido do zero** (gerar uma
+chave/IV aleatórios, comprimir com zstd, cifrar com AES-CTR, montar o
+catálogo) — que é exatamente o objetivo original do projeto: criar mods
+programaticamente em vez de só usar o editor manualmente. Isso ainda não
+foi implementado (só a leitura), mas o caminho está mapeado.
+
+## Status atual (contexto histórico da investigação abaixo)
 
 O sandbox de desenvolvimento não tem o FM26 instalado (é um container Linux
 headless; o jogo só roda em Windows/Mac via Steam/Epic/MS Store) e ninguém

@@ -1,0 +1,5 @@
+# Dependencias para tools/fmf_extract.py (leitura completa de arquivos .fmf).
+# Os demais scripts (binary_inspect.py, diff_bytes.py, endian_check.py,
+# fmf_container_probe.py) usam so a standard library do Python.
+zstandard
+pycryptodome
