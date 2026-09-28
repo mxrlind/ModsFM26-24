@@ -124,11 +124,15 @@ do editor usa o **mesmo envelope de container** que o `.fm` de save.
   falou sobre o `.fmf`: "proprietário, não dá pra abrir com editor de
   texto". Pode ser criptografia real (não só compressão), ou um dialeto de
   compressão sem magic bytes que não testamos ainda.
-- **Não testamos com um `.fmf` do FM26** ainda — a mudança pra zstd
-  observada no formato de save sugere que valeria tentar `zstd.decompress`
-  como primeira hipótese assim que tivermos uma amostra real do FM26 (ao
-  invés de zlib, que foi o que funcionou pro trailer desse arquivo de
-  2018).
+- **zstd testado e descartado** para o conteúdo das entradas deste arquivo
+  FM19: nenhuma ocorrência do magic real do zstd (`28 B5 2F FD`) em lugar
+  nenhum do arquivo, e a lib `zstandard` rejeita os bytes em todos os
+  offsets testados (`skip` 0/8/16) com "Unknown frame descriptor" — não é
+  um frame zstd válido, nem com deslocamento. Faz sentido: esse `.fmf` é de
+  2018/2019, e o zstd só aparece confirmado no formato de *save* do FM26
+  (via `fmsave`). Pra um `.fmf` do FM26 de verdade, ainda vale testar zstd
+  primeiro (é a hipótese mais forte pra essa geração do jogo) — só não se
+  aplica a esta amostra antiga.
 
 ## Tabela de hipóteses
 
@@ -139,6 +143,7 @@ do editor usa o **mesmo envelope de container** que o `.fm` de save.
 | 17 (u64) | `11 00 00 00 00 00 00 00` | Constante `17`, significado desconhecido | Média | Valor idêntico em FM19 e no fixture do FM26 |
 | corpo, +0 de cada frame | `10 00 00 00 10 00 00 00` | Mini-header de 8 bytes (2× u32) antes do payload comprimido de cada seção/entrada | Baixa | Visto repetido em 2 posições diferentes do mesmo arquivo; significado não decifrado |
 | trailer | zlib (`78 9c`) no FM19 | Codec de compressão do trailer/corpo mudou por versão (zlib → zstd) | Média-Alta | Confirmado no FM19 via decompressão bem-sucedida; extrapolado pro FM26 via `fmsave` |
+| corpo das entradas (FM19) | alta entropia, sem magic | Não é zstd | Alta (descartado) | `zstandard` rejeita em todos os offsets testados; zero ocorrências do magic `28 B5 2F FD` no arquivo inteiro |
 | diretório, 2 últimos `u64` de cada entrada | ex.: `1560165027` | Timestamps Unix (criação/modificação da entrada) | Alta | Decodificados batem com junho/2019, época real do mod testado |
 
 ## Achados confirmados
