@@ -331,6 +331,29 @@ pra testar facilmente) e brotli como famílias de compressão ainda não
 testadas, além da possibilidade de ser criptografia de verdade (não
 compressão) por cima de qualquer coisa.
 
+### Brotli testado: também descartado
+
+Testado com a lib `Brotli` (bindings oficiais do Google) sobre as mesmas
+duas entradas (`image.img` e `.tac`). O formato brotli (RFC 7932) **não
+tem magic number** — é um bitstream que começa direto nos dados
+codificados, então não dá pra "procurar assinatura" como nos outros
+formatos; a única forma de testar é tentar descomprimir mesmo.
+
+- `brotli.decompress()` (one-shot) em todos os offsets de 0 a 23 bytes —
+  zero sucessos nas duas entradas.
+- `brotli.Decompressor()` incremental (que às vezes consegue devolver
+  output parcial antes de detectar erro, útil pra pegar sinais fracos como
+  o que vimos no teste de zstd "magicless") — também zero bytes de saída
+  em qualquer offset, nas duas entradas.
+
+**Conclusão:** brotli descartado. Com isso, já eliminamos experimentalmente
+zlib, zstd (padrão e "magicless"), LZ4 (frame/legacy/block) e brotli — as
+famílias de compressão sem-encriptação mais comuns em engines de jogos.
+Continua de pé: Oodle (não testável sem SDK/binding), ou uma camada de
+criptografia real por cima de qualquer uma dessas compressões (o que
+tornaria inútil testar mais formatos de compressão sem antes achar a
+chave/algoritmo de decriptação).
+
 ## Tabela de hipóteses
 
 | Offset | Bytes | Hipótese | Confiança | Validação |
@@ -347,6 +370,7 @@ compressão) por cima de qualquer coisa.
 | conteúdo da entrada `.tac` (FM26) | alta entropia após qualquer XOR (invariante) | Não é XOR simples (1 byte, chave repetida ≤16 bytes, por índice, subtração ou NOT) | Alta (descartado) | Nenhuma das 256+256 combinações testadas produziu o magic zstd nem reduziu a entropia (que é matematicamente invariante sob XOR de 1 byte) |
 | conteúdo de todas as 8 entradas testadas (FM26, 4 arquivos) | chaves de 6 bytes derivadas via cabeçalho zstd real | Não é chave XOR fixa/repetida, nem reiniciando por entrada nem como keystream contínuo, em nenhum tamanho de 8 a 64 bytes (incluindo 32) | Alta (descartado) | 8 chaves derivadas todas diferentes (hipótese "reinicia por entrada"); alinhamento por `posição mod L` gera conflito em quase toda posição pra `L` ∈ {8,16,24,32,40,48,64} |
 | conteúdo da entrada `.tac`/`.img` (FM26) | sem magic LZ4, `lz4.block.decompress` falha em todos os offsets | Não é LZ4 (frame, legacy ou block cru) | Alta (descartado) | Zero ocorrências dos magics de frame/legacy/skippable; `lz4.block.decompress` com tamanho exato conhecido falha em offsets 0-23 nas duas entradas testadas |
+| conteúdo da entrada `.tac`/`.img` (FM26) | `brotli.decompress`/`Decompressor` incremental falham em todos os offsets | Não é brotli | Alta (descartado) | Zero sucessos e zero output parcial em offsets 0-23, nas duas entradas testadas (brotli não tem magic pra buscar diretamente) |
 
 ## Achados confirmados
 
