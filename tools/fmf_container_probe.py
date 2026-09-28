@@ -2,11 +2,17 @@
 """Reproduz a analise do estudo de caso em docs/reverse-engineering-log.md:
 le o cabecalho de 26 bytes no formato observado (FM19/FM26), localiza o
 trailer pelo ponteiro "trailer_offset - 9", tenta descomprimir o trailer
-com zlib e, se der certo, lista o diretorio de entradas (nome, extensao,
-offset, tamanhos).
+(zlib -- visto em FM19 -- ou zstd -- visto em FM26) e, se der certo, lista
+o diretorio de entradas (nome, extensao, offset, tamanhos).
+
+O conteudo de cada entrada listada (o dado de verdade, tipo ".tac"/".dbc")
+normalmente NAO abre com zlib/zstd direto no offset calculado -- ver
+docs/reverse-engineering-log.md, secao de achados em aberto. Este script
+so resolve o trailer/diretorio, que e a parte "de metadados".
 
 Nao inclui nenhuma amostra de arquivo -- baixe a sua (ex.: um .fmf real de
-`quarterback/FM-Files` no GitHub, ou um .fmf/.fm seu) e aponte o caminho.
+`quarterback/FM-Files` ou `Glawster/fmsat` no GitHub, ou um .fmf/.fm seu) e
+aponte o caminho.
 
 Uso:
     python3 tools/fmf_container_probe.py caminho/para/arquivo.fmf
@@ -15,6 +21,13 @@ import argparse
 import struct
 import sys
 import zlib
+
+try:
+    import zstandard
+
+    _HAVE_ZSTD = True
+except ImportError:
+    _HAVE_ZSTD = False
 
 HEADER_SIZE = 26
 
@@ -39,10 +52,20 @@ def parse_header(data: bytes):
 def try_decompress_trailer(data: bytes, trailer_offset: int):
     marker = data[trailer_offset : trailer_offset + 9]
     payload = data[trailer_offset + 9 :]
+
     try:
-        return marker, zlib.decompress(payload)
-    except zlib.error as e:
-        return marker, f"zlib falhou: {e}"
+        return marker, "zlib", zlib.decompress(payload)
+    except zlib.error as zlib_err:
+        zlib_error_msg = str(zlib_err)
+
+    if _HAVE_ZSTD:
+        try:
+            out = zstandard.ZstdDecompressor().decompress(payload, max_output_size=64 * 1024 * 1024)
+            return marker, "zstd", out
+        except zstandard.ZstdError as zstd_err:
+            return marker, None, f"zlib falhou ({zlib_error_msg}); zstd falhou ({zstd_err})"
+
+    return marker, None, f"zlib falhou ({zlib_error_msg}); zstd nao disponivel (pip install zstandard)"
 
 
 def parse_directory(directory: bytes):
@@ -74,6 +97,8 @@ def parse_directory(directory: bytes):
                 break
             entry_name = read_str(entry_name_len).decode("utf-8", errors="replace")
             ext_len = read_u32()
+            if not (0 < ext_len < 16):
+                break
             ext = read_str(ext_len).decode("ascii", errors="replace")
             if off + 40 > len(directory):
                 break
@@ -119,14 +144,13 @@ def main():
         print(f"trailer_offset_guess ({trailer_offset}) fora do arquivo -- formato diferente do esperado.")
         sys.exit(1)
 
-    marker, result = try_decompress_trailer(data, trailer_offset)
+    marker, codec, result = try_decompress_trailer(data, trailer_offset)
     print(f"== Trailer no offset {trailer_offset:#x} ({trailer_offset}) ==")
     print(f"  marcador (9 bytes): {marker.hex(' ')}")
-    if isinstance(result, str):
+    if codec is None:
         print(f"  {result}")
-        print("  (tente adaptar este script para zstd -- ver docs/fm26-save-format.md)")
         return
-    print(f"  descomprimido com zlib: {len(result)} bytes\n")
+    print(f"  descomprimido com {codec}: {len(result)} bytes\n")
 
     save_name, unknown_count, entries = parse_directory(result)
     print(f"== Diretorio ==")
