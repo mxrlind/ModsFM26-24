@@ -202,6 +202,64 @@ mesmo container genérico `.fmf`.
   do jogo (Ghidra) ou achar mais amostras pra análise diferencial dentro
   do próprio conteúdo da entrada, não só do container externo.
 
+### XOR simples: testado e descartado (na entrada `.tac`, FM26)
+
+Testes feitos sobre a entrada `3-3-3-1 Morphing System.tac` (940 bytes,
+`3-3-3-1 Morphing System.fmf`), com e sem pular o prefixo constante de 8
+bytes:
+
+1. **XOR de 1 byte, força bruta nas 256 chaves.** A entropia de Shannon é
+   matematicamente invariante sob XOR de 1 byte (é só uma permutação da
+   distribuição de valores), então essa métrica não serve pra distinguir
+   chaves aqui — usamos só como registro de que a entropia continua ~7.82
+   em qualquer chave, sem exceção. Nenhuma chave produziu o magic do zstd
+   nem um "run" longo de ASCII imprimível no início.
+2. **XOR de chave repetida, derivada pra forçar o magic do zstd.** Pra cada
+   tamanho de chave de 1 a 16 bytes e cada offset inicial de 0 a 16,
+   calculamos qual seria a chave necessária pra que os primeiros 4 bytes
+   descriptografados batessem com `28 B5 2F FD`, aplicamos essa chave
+   (repetida) no resto dos 940 bytes e tentamos `zstd.decompress`. Zero
+   sucessos em toda a varredura (256 combinações de offset×tamanho).
+3. **XOR por índice de posição** (`byte[i] ^ (i & 0xFF)`, variantes com
+   multiplicador e com índice invertido), **subtração por índice**, e
+   **complemento de bits** (`NOT`) — nenhum reproduziu o magic do zstd.
+4. **Comparação por XOR entre duas entradas `.tac` de arquivos irmãos**
+   (`Morphing System` vs `...High Press`, mesma base tática): se fosse
+   XOR de chave fixa por arquivo, bytes de conteúdo idêntico entre os dois
+   deveriam virar `0x00` no XOR de um contra o outro. Resultado: só os 8
+   bytes do prefixo constante (que já sabíamos ser texto puro) zeraram;
+   nos ~932 bytes restantes, só 14/940 bytes (1,5%) ficaram zero — dentro
+   do esperado por acaso (`940/256 ≈ 3,7` já seria a base aleatória; 14 é
+   um pouco acima, mas nada como o "zeramento em massa" que uma chave XOR
+   fixa produziria se o conteúdo por trás fosse texto/dados brutos
+   idênticos). **Ressalva importante:** esse teste não é conclusivo contra
+   XOR em geral — se o conteúdo por trás da criptografia já é ele mesmo
+   comprimido (zstd, por ex.), duas táticas quase iguais produzem fluxos
+   comprimidos completamente diferentes byte a byte mesmo sem nenhuma
+   criptografia por cima, então a ausência de zeros em massa não descarta
+   "comprime então criptografa", só descarta "XOR direto sobre dados
+   brutos/estruturados idênticos".
+5. **zstd "magicless"** (frame sem os 4 bytes de magic, recurso real do
+   protocolo zstd, exposto em Python como
+   `zstandard.FORMAT_ZSTD1_MAGICLESS`) — testado sem XOR, em vários
+   offsets. `skip=8` (pulando o prefixo constante) chegou a passar da
+   checagem inicial de framing e falhar com "Unsupported frame parameter"
+   em vez de "Data corruption detected" — sinal fraco de que o byte ali
+   tem *alguma* estrutura parecida com um frame header válido, mas não
+   fechou. Não teve sucesso completo em nenhum offset testado.
+
+**Conclusão desta rodada:** XOR simples (de qualquer chave curta, fixa ou
+posicional) está descartado como única camada de proteção da entrada
+`.tac`. Combinado com o teste de zstd "magicless" (quase bateu, mas não
+fechou), a hipótese que ganha força é "compressão real (zstd ou algo
+próprio) por trás de uma camada de ofuscação/criptografia mais estruturada
+que XOR simples" — ou um dialeto de zstd com parâmetros não padrão que a
+lib Python não reconhece. Próximo passo natural, se surgirem mais amostras:
+testar XOR de chave longa (>16 bytes, ex. derivada de um hash do nome do
+arquivo) e comparar o prefixo de 8 bytes entre *muitas* entradas de tipos
+diferentes pra ver se ele varia com o tipo de conteúdo (o que ajudaria a
+decidir se é um "tipo de seção" em vez de uma constante universal).
+
 ## Tabela de hipóteses
 
 | Offset | Bytes | Hipótese | Confiança | Validação |
@@ -215,6 +273,7 @@ mesmo container genérico `.fmf`.
 | corpo das entradas (FM26) | alta entropia, sem magic | Não é zstd puro (mesmo com o trailer do mesmo arquivo sendo zstd) | Alta (descartado) | Só 1 ocorrência do magic `28 B5 2F FD` no arquivo inteiro (a do trailer); entradas `image.img`/`.tac` não decodificam |
 | diretório, 2 últimos `u64` de cada entrada | ex.: `1560165027` (FM19) / `0xFFFFFFF188066E09` (FM26) | Timestamps Unix no FM19; no FM26 parecem ser um valor-sentinela/"não definido" (`f1 ff ff ff` sugere placeholder, não timestamp real) | Alta (FM19) / Média (FM26, campo existe mas com outro significado/estado) | FM19: decodificados batem com junho/2019. FM26: valor idêntico e repetido nas duas entradas do mesmo arquivo, sugerindo "vazio", não uma data real |
 | 25 (u8) | `3` no FM26 real, `0` no FM19 | Byte de versão/flag que mudou entre gerações | Média-Alta | `u8@25=3` bate exatamente com a constante usada no fixture sintético do `fmsave` para FM26 |
+| conteúdo da entrada `.tac` (FM26) | alta entropia após qualquer XOR (invariante) | Não é XOR simples (1 byte, chave repetida ≤16 bytes, por índice, subtração ou NOT) | Alta (descartado) | Nenhuma das 256+256 combinações testadas produziu o magic zstd nem reduziu a entropia (que é matematicamente invariante sob XOR de 1 byte) |
 
 ## Achados confirmados
 
