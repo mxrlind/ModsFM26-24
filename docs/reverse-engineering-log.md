@@ -103,12 +103,44 @@ próprio `"..._TYPE_HANDLER"`, provavelmente algo como
 ### O que isso destrava
 
 Como a "proteção" é só o algoritmo (real, mas com a chave exposta ao lado
-do dado), **dá pra ler qualquer `.fmf`** com `tools/fmf_extract.py`, e em
-princípio também dá pra **escrever um `.fmf` válido do zero** (gerar uma
-chave/IV aleatórios, comprimir com zstd, cifrar com AES-CTR, montar o
-catálogo) — que é exatamente o objetivo original do projeto: criar mods
-programaticamente em vez de só usar o editor manualmente. Isso ainda não
-foi implementado (só a leitura), mas o caminho está mapeado.
+do dado), **dá pra ler qualquer `.fmf`** com `tools/fmf_extract.py`, e
+também **dá pra escrever um `.fmf` válido do zero** — que é exatamente o
+objetivo original do projeto: criar mods programaticamente em vez de só
+usar o editor manualmente.
+
+### Escrita confirmada: `tools/fmf_write.py`
+
+Implementado e testado. Escolhemos **shortlist** como primeiro tipo de
+conteúdo pra escrever porque é o único cujo esquema *interno* completo (o
+que vai dentro do recurso, não só o container) também está mapeado: nome
+da shortlist + lista de FM Unique IDs de jogador.
+
+**Teste de round-trip completo**, sem depender do jogo nem de nenhum
+arquivo de terceiros — geramos o `.fmf` do zero e lemos de volta só com
+nossas próprias ferramentas:
+
+```
+python3 tools/fmf_write.py "Zagueiros Jovens" 123456 789012 555555 --out teste.fmf
+python3 tools/fmf_extract.py teste.fmf --extract-all --out saida/
+```
+
+Resultado: os 3 recursos (`image.img`, `Zagueiros Jovens.slf`,
+`_data/details.aom`) descriptografam com sucesso, e o conteúdo do `.slf`
+decodificado bate **exatamente** com o que foi escrito — nome
+`"Zagueiros Jovens"`, versão de banco `0x6281a3`, e os 3 IDs
+`[123456, 789012, 555555]` na ordem certa (curiosidade: `123456` aparece
+codificado como `40 e2 01 00`, o mesmíssimo exemplo de little-endian do
+passo a passo original desta investigação). O `_data/details.aom` também
+decodifica de volta com o texto `"PLAYER_SHORTLIST_TYPE_HANDLER"` e o
+nome da ferramenta.
+
+**Ressalva importante:** isso confirma que nossa leitura e escrita são
+**consistentes entre si** (a estrutura de bytes está correta e
+implementada fielmente) — não confirma que o **FM26 de verdade aceitaria**
+esse arquivo, já que não temos o jogo neste ambiente pra testar
+carregando-o de fato. Se alguém com FM26 instalado colocar esse arquivo em
+`Documents/Sports Interactive/Football Manager 26/shortlists/` e tentar
+importar, isso seria a validação final que falta.
 
 ## Status atual (contexto histórico da investigação abaixo)
 
